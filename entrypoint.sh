@@ -65,12 +65,7 @@ setOutput() {
     echo "${1}=${2}" >> "${GITHUB_OUTPUT}"
 }
 
-debug_log() {
-    echo "::debug::$1"
-}
-
 current_branch=$(git rev-parse --abbrev-ref HEAD)
-debug_log "current_branch=${current_branch}"
 
 pre_release="$prerelease"
 IFS=',' read -ra branch <<< "$release_branches"
@@ -87,11 +82,9 @@ for b in "${branch[@]}"; do
     fi
 done
 echo "pre_release = $pre_release"
-debug_log "pre_release=${pre_release}"
 
 # fetch tags
 git fetch --tags
-debug_log "Fetched tags"
 
 # Set no tag prefix (not even v)
 tagPrefix=""
@@ -106,11 +99,9 @@ if [[ "${tag_prefix}" != "false" ]]
 then
   tagPrefix=$tag_prefix
 fi
-debug_log "tagPrefix=${tagPrefix}"
 
 tagFmt="^$tagPrefix?[0-9]+\.[0-9]+\.[0-9]+$"
 preTagFmt="^$tagPrefix?[0-9]+\.[0-9]+\.[0-9]+(-$suffix\.[0-9]+)$"
-debug_log "tagFmt=${tagFmt} preTagFmt=${preTagFmt}"
 
 # get the git refs
 git_refs=
@@ -119,7 +110,7 @@ case "$tag_context" in
         git_refs=$(git for-each-ref --sort=-v:refname --format '%(refname:lstrip=2)')
         ;;
     *branch*)
-        git_refs=$(git tag --list --merged HEAD --sort=-v:refname)
+        git_refs=$(git tag --list --merged HEAD --sort=committerdate)
         ;;
     * ) echo "Unrecognised context"
         exit 1;;
@@ -128,10 +119,8 @@ esac
 # get the latest tag that looks like a semver (with or without v)
 matching_tag_refs=$( (grep -E "$tagFmt" <<< "$git_refs") || true)
 matching_pre_tag_refs=$( (grep -E "$preTagFmt" <<< "$git_refs") || true)
-tag=$(head -n 1 <<< "$matching_tag_refs")
-pre_tag=$(head -n 1 <<< "$matching_pre_tag_refs")
-
-debug_log "initial tag=${tag} pre_tag=${pre_tag}"
+tag=$(tail -n 1 <<< "$matching_tag_refs")
+pre_tag=$(tail -n 1 <<< "$matching_pre_tag_refs")
 
 # if there are none, start tags at initial version
 if [ -z "$tag" ]
@@ -142,13 +131,11 @@ then
         pre_tag="$tagPrefix$initial_version"
     fi
 fi
-debug_log "resolved tag=${tag} pre_tag=${pre_tag}"
 
 # get current commit hash for tag
 tag_commit=$(git rev-list -n 1 "$tag" || true )
 # get current commit hash
 commit=$(git rev-parse HEAD)
-debug_log "tag_commit=${tag_commit} commit=${commit}"
 # skip if there are no new commits for non-pre_release
 if [ "$tag_commit" == "$commit" ] && [ "$force_without_changes" == "false" ]
 then
@@ -180,17 +167,13 @@ declare -A history_type=(
 )
 log=${history_type[${branch_history}]}
 printf "History:\n---\n%s\n---\n" "$log"
-if $pre_release
-then
-    tag=$pre_tag
-fi
+
 if [ -z "$tagPrefix" ]
 then
   current_tag=${tag}
 else
   current_tag="$(echo ${tag}| sed "s/${tagPrefix}//g")"
 fi
-
 case "$log" in
     *$major_string_token* ) new=${tagPrefix}$(semver -i major "${current_tag}"); part="major";;
     *$minor_string_token* ) new=${tagPrefix}$(semver -i minor "${current_tag}"); part="minor";;
@@ -217,7 +200,6 @@ case "$log" in
         fi
         ;;
 esac
-debug_log "calculated bump part=${part} new=${new}"
 
 if $pre_release
 then
@@ -244,13 +226,11 @@ then
 else
     echo -e "Bumping tag ${tag} - New tag ${new}"
 fi
-debug_log "post prerelease evaluation part=${part} new=${new}"
 
 # as defined in readme if CUSTOM_TAG is used any semver calculations are irrelevant.
 if [ -n "$custom_tag" ]
 then
     new="$custom_tag"
-    debug_log "Using CUSTOM_TAG override: ${new}"
 fi
 
 # set outputs
@@ -262,7 +242,6 @@ setOutput "old_tag" "$tag"
 # dry run exit without real changes
 if $dryrun
 then
-    debug_log "DRY_RUN enabled, exiting without creating or pushing tag"
     exit 0
 fi
 
@@ -275,10 +254,8 @@ else
     echo "EVENT: creating local tag $new"
     git tag -f "$new" || exit 1
 fi
-debug_log "Local tag ${new} created"
 
 echo "EVENT: pushing tag $new to origin"
-debug_log "Pushing tag ${new} to origin"
 
 if $git_api_tagging
 then
@@ -286,7 +263,6 @@ then
     dt=$(date '+%Y-%m-%dT%H:%M:%SZ')
     full_name=$GITHUB_REPOSITORY
     git_refs_url=$(jq .repository.git_refs_url "$GITHUB_EVENT_PATH" | tr -d '"' | sed 's/{\/sha}//g')
-    debug_log "git_refs_url=${git_refs_url}"
 
     echo "$dt: **pushing tag $new to repo $full_name"
 
@@ -313,6 +289,5 @@ EOF
     fi
 else
     # use git cli to push
-    debug_log "git push -f origin ${new}"
     git push -f origin "$new" || exit 1
 fi
